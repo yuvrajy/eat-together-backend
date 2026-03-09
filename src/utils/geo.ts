@@ -37,9 +37,9 @@ export function midpoint(a: Coordinates, b: Coordinates): Coordinates {
 
 /**
  * Returns the search radius to use around the midpoint.
- * = 50% of user-to-user distance, clamped to [1 000 m, 5 000 m].
+ * = 20% of user-to-user distance, clamped to [1 000 m, 50 000 m].
  */
 export function computeSearchRadius(a: Coordinates, b: Coordinates): number {
   const distanceMeters = haversineDistance(a, b);
-  return Math.min(Math.max(distanceMeters * 0.5, 1000), 5000);
+  return Math.min(Math.max(distanceMeters * 0.2, 1000), 50000);
 }

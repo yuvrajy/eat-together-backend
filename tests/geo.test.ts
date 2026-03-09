@@ -49,28 +49,28 @@ describe("computeSearchRadius", () => {
     expect(radius).toBe(1000);
   });
 
-  it("clamps to 5000 m for very distant points", () => {
+  it("clamps to 50000 m for very distant points (LA ↔ NYC)", () => {
     const la = { lat: 34.0522, lng: -118.2437 };
     const nyc = { lat: 40.7128, lng: -74.006 };
     const radius = computeSearchRadius(la, nyc);
-    expect(radius).toBe(5000);
+    expect(radius).toBe(50000);
   });
 
-  it("returns 50% of distance for mid-range points", () => {
-    // Downtown LA ↔ Santa Monica: ~22 km apart → radius ~ 11 km → clamped to 5000
-    const downtown = { lat: 34.0407, lng: -118.2468 };
-    const santaMonica = { lat: 34.0195, lng: -118.4912 };
-    const radius = computeSearchRadius(downtown, santaMonica);
-    // 50% of ~22 km = ~11 km → clamped to 5000
-    expect(radius).toBe(5000);
+  it("returns 20% of distance for mid-range points (New Orleans ↔ Baton Rouge)", () => {
+    // ~100 km apart → 20% = ~20 km
+    const newOrleans = { lat: 29.9511, lng: -90.0715 };
+    const batonRouge = { lat: 30.4515, lng: -91.1871 };
+    const radius = computeSearchRadius(newOrleans, batonRouge);
+    expect(radius).toBeGreaterThan(10000);
+    expect(radius).toBeLessThanOrEqual(50000);
   });
 
-  it("returns 50% for Hollywood ↔ Silver Lake (close pair)", () => {
-    // ~5 km apart → 50% = ~2.5 km
+  it("returns 20% for Hollywood ↔ Silver Lake (close pair)", () => {
+    // ~5 km apart → 20% = ~1 km → clamped to 1000
     const hollywood = { lat: 34.0928, lng: -118.3287 };
     const silverLake = { lat: 34.0869, lng: -118.2702 };
     const radius = computeSearchRadius(hollywood, silverLake);
-    expect(radius).toBeGreaterThan(1000);
-    expect(radius).toBeLessThanOrEqual(5000);
+    expect(radius).toBeGreaterThanOrEqual(1000);
+    expect(radius).toBeLessThanOrEqual(50000);
   });
 });
