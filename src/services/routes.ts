@@ -42,12 +42,15 @@ export async function getRouteMatrix(
   destinations: Coordinates[],
   travelMode: string = "DRIVE"
 ): Promise<RouteMatrixElement[]> {
-  const body = {
+  // TRAFFIC_AWARE only works with DRIVE — other modes fail with INVALID_ARGUMENT
+  const body: Record<string, unknown> = {
     origins: origins.map(toWaypoint),
     destinations: destinations.map(toWaypoint),
     travelMode,
-    routingPreference: "TRAFFIC_AWARE",
   };
+  if (travelMode === "DRIVE") {
+    body["routingPreference"] = "TRAFFIC_AWARE";
+  }
 
   const response = await fetch(ROUTE_MATRIX_URL, {
     method: "POST",
