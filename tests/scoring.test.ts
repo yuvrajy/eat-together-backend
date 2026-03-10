@@ -85,8 +85,8 @@ describe("scoreAndRank", () => {
     expect(r.distance_from_a_meters).toBe(6000);
     expect(r.distance_from_b_meters).toBe(7500);
 
-    // max=900, diff=150 → score = 900 + 0.3*150 = 945
-    expect(r.fairness_score).toBeCloseTo(945, 5);
+    // max=900, stdDev([750,900])=75 → score = 900 + 0.3*75 = 922.5
+    expect(r.fairness_score).toBeCloseTo(922.5, 1);
   });
 
   it("returns empty array when no valid routes exist", () => {

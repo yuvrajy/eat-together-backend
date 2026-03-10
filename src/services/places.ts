@@ -12,6 +12,7 @@ const FIELD_MASK = [
   "places.rating",
   "places.priceLevel",
   "places.primaryType",
+  "places.userRatingCount",
 ].join(",");
 
 interface PlacesApiResponse {
@@ -26,6 +27,7 @@ interface PlaceResult {
   rating?: number;
   priceLevel?: string;
   primaryType?: string;
+  userRatingCount?: number;
 }
 
 /**
@@ -60,9 +62,7 @@ export async function findNearbyRestaurants(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(
-      `Places API error ${response.status}: ${errorText}`
-    );
+    throw new Error(`Places API error ${response.status}: ${errorText}`);
   }
 
   const data = (await response.json()) as PlacesApiResponse;
@@ -90,5 +90,6 @@ export async function findNearbyRestaurants(
       rating: p.rating,
       price_level: p.priceLevel,
       primary_type: p.primaryType,
+      user_rating_count: p.userRatingCount,
     }));
 }
