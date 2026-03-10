@@ -111,9 +111,13 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
     let candidates = await fetchCandidates(mid, radius, mode, cuisineTypes, preferences);
 
-    if (candidates.length === 0) {
-      radius = Math.min(radius * 1.5, 50_000);
-      candidates = await fetchCandidates(mid, radius, mode, cuisineTypes, preferences);
+    // Expand radius if fewer than 5 candidates — catches sparse areas, not just zero
+    if (candidates.length < 5) {
+      radius = Math.min(radius * 2, 50_000);
+      const more = await fetchCandidates(mid, radius, mode, cuisineTypes, preferences);
+      const map = new Map(candidates.map((c) => [c.place_id, c]));
+      for (const r of more) if (!map.has(r.place_id)) map.set(r.place_id, r);
+      candidates = Array.from(map.values());
     }
 
     if (candidates.length === 0) {
