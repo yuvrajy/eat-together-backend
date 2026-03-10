@@ -125,18 +125,22 @@ describe("POST /api/suggest", () => {
   });
 
   it("retries with larger radius when no candidates found initially", async () => {
+    // With 2 users: 2 search centers (centroid + pairwise midpoint) × 1 generic call = 2 initial calls
+    // All return empty → triggers radius expansion → 2 more calls with larger radius
+    mockFindNearby.mockResolvedValue(MOCK_CANDIDATES);
+    // First batch (sparse) returns nothing to force expansion
     mockFindNearby
-      .mockResolvedValueOnce([]) // first call returns empty
-      .mockResolvedValueOnce(MOCK_CANDIDATES); // retry succeeds
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(MOCK_CANDIDATES);
 
     const res = await request(app).post("/api/suggest").send(VALID_BODY);
 
     expect(res.status).toBe(200);
-    expect(mockFindNearby).toHaveBeenCalledTimes(2);
-    // Second call should use a larger radius
+    // Expansion calls should use a larger radius than initial calls
     const firstRadius = (mockFindNearby.mock.calls[0] as unknown[])[1] as number;
-    const secondRadius = (mockFindNearby.mock.calls[1] as unknown[])[1] as number;
-    expect(secondRadius).toBeGreaterThan(firstRadius);
+    const lastRadius = (mockFindNearby.mock.calls[mockFindNearby.mock.calls.length - 1] as unknown[])[1] as number;
+    expect(lastRadius).toBeGreaterThan(firstRadius);
   });
 
   it("returns 404 when no candidates found even after retry", async () => {

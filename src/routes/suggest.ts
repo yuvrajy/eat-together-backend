@@ -103,21 +103,42 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     return findNearbyRestaurants(mid, radius, cuisineTypes);
   }
 
+  // Max candidates before route matrix — Routes API caps at 625 elements (origins × destinations)
+  const MAX_CANDIDATES = Math.floor(625 / users.length);
+
   try {
     const mid = users.length === 2 ? midpoint(users[0], users[1]) : centroid(users);
     let radius = users.length === 2
       ? computeSearchRadius(users[0], users[1])
       : maxPairwiseRadius(users);
 
-    let candidates = await fetchCandidates(mid, radius, mode, cuisineTypes, preferences);
+    // Search from centroid + all pairwise midpoints for broader coverage
+    const searchCenters: Coordinates[] = [mid];
+    for (let i = 0; i < users.length; i++) {
+      for (let j = i + 1; j < users.length; j++) {
+        searchCenters.push(midpoint(users[i], users[j]));
+      }
+    }
 
-    // Expand radius if fewer than 5 candidates — catches sparse areas, not just zero
+    const allBatches = await Promise.all(
+      searchCenters.map((center) => fetchCandidates(center, radius, mode, cuisineTypes, preferences))
+    );
+    const candidateMap = new Map<string, CandidateRestaurant>();
+    for (const batch of allBatches) {
+      for (const r of batch) if (!candidateMap.has(r.place_id)) candidateMap.set(r.place_id, r);
+    }
+    let candidates = Array.from(candidateMap.values());
+
+    // Expand radius if still sparse
     if (candidates.length < 5) {
       radius = Math.min(radius * 2, 50_000);
-      const more = await fetchCandidates(mid, radius, mode, cuisineTypes, preferences);
-      const map = new Map(candidates.map((c) => [c.place_id, c]));
-      for (const r of more) if (!map.has(r.place_id)) map.set(r.place_id, r);
-      candidates = Array.from(map.values());
+      const moreBatches = await Promise.all(
+        searchCenters.map((center) => fetchCandidates(center, radius, mode, cuisineTypes, preferences))
+      );
+      for (const batch of moreBatches) {
+        for (const r of batch) if (!candidateMap.has(r.place_id)) candidateMap.set(r.place_id, r);
+      }
+      candidates = Array.from(candidateMap.values());
     }
 
     if (candidates.length === 0) {
@@ -125,24 +146,26 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    // Cap to stay within Routes API element limit
+    if (candidates.length > MAX_CANDIDATES) candidates = candidates.slice(0, MAX_CANDIDATES);
+
     // Hard price filter for simple mode
     if (mode === "simple" && maxPrice && PRICE_RANK[maxPrice] !== undefined) {
       const limit = PRICE_RANK[maxPrice];
       const filtered = candidates.filter(
         (c) => c.price_level === undefined || (PRICE_RANK[c.price_level] ?? 2) <= limit
       );
-      // Only apply filter if it leaves at least 3 candidates
       if (filtered.length >= 3) candidates = filtered;
     }
 
     const restaurantCoords = candidates.map((c) => c.location);
     const matrix = await getRouteMatrix(users, restaurantCoords, travelMode);
 
-    // Return up to 10 for the swipe phase; final top 3 chosen after swiping on the client
+    // Return top 20 for swipe phase; client picks top 5 after swiping
     const results =
       mode === "extraFair" && preferences.length === users.length
-        ? scoreAndRankExtraFair(candidates, matrix, preferences, 10)
-        : scoreAndRank(candidates, matrix, 10);
+        ? scoreAndRankExtraFair(candidates, matrix, preferences, 20)
+        : scoreAndRank(candidates, matrix, 20);
 
     if (results.length === 0) {
       res.status(404).json({ error: "Could not calculate routes to any nearby restaurants. Try different coordinates." });
