@@ -3,7 +3,7 @@ import { findNearbyRestaurants } from "../services/places";
 import { getRouteMatrix } from "../services/routes";
 import { scoreAndRank, scoreAndRankExtraFair } from "../services/scoring";
 import { CandidateRestaurant, Coordinates, SuggestRequest, SuggestResponse, UserPreference } from "../types";
-import { computeSearchRadius, midpoint } from "../utils/geo";
+import { computeSearchRadius, haversineDistance, midpoint } from "../utils/geo";
 
 const router = Router();
 
@@ -147,8 +147,18 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    // Pre-rank by heuristic (rating, popularity, distance to centroid) so we keep best N, not first N
+    function candidateScore(c: CandidateRestaurant): number {
+      const rating = (c.rating ?? 0) * 20;
+      const popularity = Math.log2((c.user_rating_count ?? 0) + 1);
+      const distPenalty = haversineDistance(c.location, mid) / 10000;
+      return rating + popularity - distPenalty;
+    }
+
     // Cap to stay within Routes API element limit
-    if (candidates.length > MAX_CANDIDATES) candidates = candidates.slice(0, MAX_CANDIDATES);
+    if (candidates.length > MAX_CANDIDATES) {
+      candidates = [...candidates].sort((a, b) => candidateScore(b) - candidateScore(a)).slice(0, MAX_CANDIDATES);
+    }
 
     // Hard price filter for simple mode
     if (mode === "simple" && maxPrice && PRICE_RANK[maxPrice] !== undefined) {
