@@ -113,12 +113,16 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
       ? computeSearchRadius(users[0], users[1])
       : maxPairwiseRadius(users);
 
-    // Search from centroid + all pairwise midpoints for broader coverage
-    const searchCenters: Coordinates[] = [mid];
+    // Search from centroid + pairwise midpoints; cap to avoid quadratic API blowup
+    const MAX_SEARCH_CENTERS = 10;
+    let searchCenters: Coordinates[] = [mid];
     for (let i = 0; i < users.length; i++) {
       for (let j = i + 1; j < users.length; j++) {
         searchCenters.push(midpoint(users[i], users[j]));
       }
+    }
+    if (searchCenters.length > MAX_SEARCH_CENTERS) {
+      searchCenters = [searchCenters[0], ...searchCenters.slice(1, MAX_SEARCH_CENTERS)];
     }
 
     const allBatches = await Promise.all(
