@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", version: "1.1.0", timestamp: new Date().toISOString() });
+  res.json({ status: "ok", version: config.version, timestamp: new Date().toISOString() });
 });
 
 app.use("/api/suggest", suggestRouter);
