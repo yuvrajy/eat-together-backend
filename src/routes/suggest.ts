@@ -60,6 +60,19 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
 
   const travelMode = body.travel_mode ?? "DRIVE";
   const mode = body.mode ?? "simple";
+
+  const VALID_TRAVEL_MODES = ["DRIVE", "WALK", "BICYCLE", "TRANSIT"] as const;
+  if (!VALID_TRAVEL_MODES.includes(travelMode as (typeof VALID_TRAVEL_MODES)[number])) {
+    res.status(400).json({ error: "travel_mode must be one of: DRIVE, WALK, BICYCLE, TRANSIT" });
+    return;
+  }
+
+  const VALID_MODES = ["simple", "extraFair"] as const;
+  if (!VALID_MODES.includes(mode as (typeof VALID_MODES)[number])) {
+    res.status(400).json({ error: "mode must be one of: simple, extraFair" });
+    return;
+  }
+
   const cuisineTypes = body.cuisine_types;
   const maxPrice: string | undefined = body.max_price;
   const preferences: UserPreference[] = body.preferences ?? [];
