@@ -2,7 +2,7 @@ import { Request, Response, Router } from "express";
 import { findNearbyRestaurants } from "../services/places";
 import { getRouteMatrix } from "../services/routes";
 import { scoreAndRank, scoreAndRankExtraFair } from "../services/scoring";
-import { Coordinates, SuggestRequest, SuggestResponse, UserPreference } from "../types";
+import { CandidateRestaurant, Coordinates, SuggestRequest, SuggestResponse, UserPreference } from "../types";
 import { computeSearchRadius, midpoint } from "../utils/geo";
 
 const router = Router();
@@ -72,17 +72,48 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     PRICE_LEVEL_VERY_EXPENSIVE: 4,
   };
 
+  // For extraFair mode: one Places API call per user's cuisine set, merged+deduped
+  async function fetchCandidates(
+    mid: Coordinates,
+    radius: number,
+    mode: string,
+    cuisineTypes: string[] | undefined,
+    preferences: UserPreference[]
+  ): Promise<CandidateRestaurant[]> {
+    if (mode === "extraFair" && preferences.length > 0) {
+      // Build list of cuisine groups: one per user + one generic fallback
+      const groups: (string[] | undefined)[] = preferences.map((p) =>
+        p.cuisineTypes && p.cuisineTypes.length > 0 ? p.cuisineTypes : undefined
+      );
+      groups.push(undefined); // generic restaurant search always included
+
+      const batches = await Promise.all(
+        groups.map((types) => findNearbyRestaurants(mid, radius, types))
+      );
+
+      const map = new Map<string, CandidateRestaurant>();
+      for (const batch of batches) {
+        for (const r of batch) {
+          if (!map.has(r.place_id)) map.set(r.place_id, r);
+        }
+      }
+      return Array.from(map.values());
+    }
+
+    return findNearbyRestaurants(mid, radius, cuisineTypes);
+  }
+
   try {
     const mid = users.length === 2 ? midpoint(users[0], users[1]) : centroid(users);
     let radius = users.length === 2
       ? computeSearchRadius(users[0], users[1])
       : maxPairwiseRadius(users);
 
-    let candidates = await findNearbyRestaurants(mid, radius, cuisineTypes);
+    let candidates = await fetchCandidates(mid, radius, mode, cuisineTypes, preferences);
 
     if (candidates.length === 0) {
       radius = Math.min(radius * 1.5, 50_000);
-      candidates = await findNearbyRestaurants(mid, radius, cuisineTypes);
+      candidates = await fetchCandidates(mid, radius, mode, cuisineTypes, preferences);
     }
 
     if (candidates.length === 0) {

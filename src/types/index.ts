@@ -25,6 +25,8 @@ export interface SuggestRequest {
   preferences?: UserPreference[];
   /** Simple mode cuisine filter — any restaurant must match at least one type */
   cuisine_types?: string[];
+  /** Simple mode hard price cap e.g. "PRICE_LEVEL_MODERATE" */
+  max_price?: string;
 }
 
 export interface CandidateRestaurant {
