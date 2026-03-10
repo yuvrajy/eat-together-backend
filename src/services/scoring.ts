@@ -6,15 +6,14 @@ import {
 } from "../types";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Types
 // ---------------------------------------------------------------------------
 
-function stdDev(values: number[]): number {
-  if (values.length < 2) return 0;
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
-  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
-  return Math.sqrt(variance);
-}
+type PriorityKey = "distance" | "cuisine" | "price" | "vibe";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
 const PRICE_RANK: Record<string, number> = {
   PRICE_LEVEL_FREE: 0,
@@ -24,7 +23,75 @@ const PRICE_RANK: Record<string, number> = {
   PRICE_LEVEL_VERY_EXPENSIVE: 4,
 };
 
-function priceRank(level: string | undefined): number {
+// Hard-cap travel times (seconds) per mode — absolute distance score decays linearly to 0
+const DIST_HARD_CAP: Record<string, number> = {
+  DRIVE: 3600,    // 60 min
+  WALK: 1800,     // 30 min
+  BICYCLE: 2400,  // 40 min
+  TRANSIT: 3600,  // 60 min
+};
+
+// ---------------------------------------------------------------------------
+// Cuisine family taxonomy for graded partial-credit matching
+// ---------------------------------------------------------------------------
+
+interface CuisineTaxonomy { family: string; region: string }
+
+const CUISINE_MAP: Record<string, CuisineTaxonomy> = {
+  italian_restaurant:       { family: "italian",        region: "european"       },
+  pizza_restaurant:         { family: "italian",        region: "european"       },
+  french_restaurant:        { family: "french",         region: "european"       },
+  spanish_restaurant:       { family: "spanish",        region: "european"       },
+  portuguese_restaurant:    { family: "portuguese",     region: "european"       },
+  greek_restaurant:         { family: "greek",          region: "mediterranean"  },
+  mediterranean_restaurant: { family: "mediterranean",  region: "mediterranean"  },
+  middle_eastern_restaurant:{ family: "middle_eastern", region: "mediterranean"  },
+  turkish_restaurant:       { family: "turkish",        region: "mediterranean"  },
+  sushi_restaurant:         { family: "japanese",       region: "asian"          },
+  japanese_restaurant:      { family: "japanese",       region: "asian"          },
+  ramen_restaurant:         { family: "japanese",       region: "asian"          },
+  chinese_restaurant:       { family: "chinese",        region: "asian"          },
+  dim_sum_restaurant:       { family: "chinese",        region: "asian"          },
+  thai_restaurant:          { family: "thai",           region: "asian"          },
+  korean_restaurant:        { family: "korean",         region: "asian"          },
+  vietnamese_restaurant:    { family: "vietnamese",     region: "asian"          },
+  asian_restaurant:         { family: "asian",          region: "asian"          },
+  indian_restaurant:        { family: "indian",         region: "south_asian"    },
+  pakistani_restaurant:     { family: "pakistani",      region: "south_asian"    },
+  mexican_restaurant:       { family: "mexican",        region: "latin"          },
+  latin_american_restaurant:{ family: "latin_american", region: "latin"          },
+  brazilian_restaurant:     { family: "brazilian",      region: "latin"          },
+  hamburger_restaurant:     { family: "american",       region: "american"       },
+  american_restaurant:      { family: "american",       region: "american"       },
+  barbecue_restaurant:      { family: "american",       region: "american"       },
+  sandwich_shop:            { family: "american",       region: "american"       },
+};
+
+/**
+ * Graded cuisine match: exact=1.0, same family=0.85, same region=0.55, none=0.0
+ * Returns the best match across all user-preferred types.
+ */
+function gradedCuisineScore(
+  restaurantType: string | undefined,
+  userCuisines: string[]
+): number {
+  if (!restaurantType || userCuisines.length === 0) return 0;
+  return userCuisines.reduce((best, userType) => {
+    if (userType === restaurantType) return Math.max(best, 1.0);
+    const rTax = CUISINE_MAP[restaurantType];
+    const uTax = CUISINE_MAP[userType];
+    if (!rTax || !uTax) return best;
+    if (rTax.family === uTax.family) return Math.max(best, 0.85);
+    if (rTax.region === uTax.region) return Math.max(best, 0.55);
+    return best;
+  }, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function priceRankVal(level: string | undefined): number {
   return level !== undefined ? (PRICE_RANK[level] ?? 2) : 2;
 }
 
@@ -66,18 +133,103 @@ function buildScoredRestaurant(
 }
 
 // ---------------------------------------------------------------------------
-// Simple mode — N-user fairness score (lower = better)
-// score = max(times) + 0.3 × stdDev(times)
+// Scoring primitives
+// ---------------------------------------------------------------------------
+
+/** Absolute distance score: linear decay from 1 at t=0 to 0 at hard cap. */
+function absoluteDistScore(t: number, travelMode: string): number {
+  const cap = DIST_HARD_CAP[travelMode] ?? DIST_HARD_CAP.DRIVE;
+  return Math.max(0.001, 1 - t / cap);
+}
+
+/**
+ * Soft exponential price penalty.
+ * diff > 0 means restaurant is more expensive than user's max.
+ * exp(-0.75×diff): diff=1 → 0.47, diff=2 → 0.22, diff=3 → 0.10
+ */
+function softPriceScore(restaurantLevel: string | undefined, maxPriceLevel: string): number {
+  const diff = priceRankVal(restaurantLevel) - priceRankVal(maxPriceLevel);
+  return diff <= 0 ? 1.0 : Math.exp(-0.75 * diff);
+}
+
+/** Nash Social Welfare: geometric mean of per-user utilities. */
+function nashWelfare(utilities: number[]): number {
+  if (utilities.length === 0) return 0;
+  const product = utilities.reduce((p, u) => p * Math.max(u, 0.001), 1);
+  return Math.pow(product, 1 / utilities.length);
+}
+
+// ---------------------------------------------------------------------------
+// ROC Weights
+// ---------------------------------------------------------------------------
+
+/**
+ * Rank Order Centroid weights for ordered priority list restricted to active criteria.
+ * w_k = (1/N) × Σ_{i=k+1}^{N} 1/i   (0-indexed rank k, N = total active criteria)
+ * Unranked-but-active criteria share the lowest ROC weight slots equally.
+ */
+function computeROCWeights(
+  priorities: PriorityKey[],
+  activeCriteria: Set<PriorityKey>
+): Record<PriorityKey, number> {
+  const rankedActive = priorities.filter((p) => activeCriteria.has(p));
+  const unrankedActive = ([...activeCriteria] as PriorityKey[]).filter(
+    (k) => !priorities.includes(k)
+  );
+  const ordered = [...rankedActive, ...unrankedActive];
+  const N = ordered.length;
+
+  const weights: Record<PriorityKey, number> = { distance: 0, cuisine: 0, price: 0, vibe: 0 };
+  if (N === 0) return weights;
+
+  ordered.forEach((key, k) => {
+    let sum = 0;
+    for (let i = k + 1; i <= N; i++) sum += 1 / i;
+    weights[key] = sum / N;
+  });
+  return weights;
+}
+
+// ---------------------------------------------------------------------------
+// Pareto filter
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns indices (into candidateData) of non-dominated candidates.
+ * Candidate A dominates B if every user utility of A ≥ B, and at least one strictly >.
+ */
+function paretoFilter(candidateData: { utilities: number[] }[]): Set<number> {
+  const dominated = new Set<number>();
+  for (let i = 0; i < candidateData.length; i++) {
+    if (dominated.has(i)) continue;
+    for (let j = 0; j < candidateData.length; j++) {
+      if (i === j || dominated.has(j)) continue;
+      const a = candidateData[i].utilities;
+      const b = candidateData[j].utilities;
+      if (a.every((u, idx) => u >= b[idx]) && a.some((u, idx) => u > b[idx])) {
+        dominated.add(j);
+      }
+    }
+  }
+  const survivors = new Set<number>();
+  for (let i = 0; i < candidateData.length; i++) {
+    if (!dominated.has(i)) survivors.add(i);
+  }
+  return survivors;
+}
+
+// ---------------------------------------------------------------------------
+// Simple mode — absolute distance → Nash welfare (lower fairness_score = better)
 // ---------------------------------------------------------------------------
 
 export function scoreAndRank(
   candidates: CandidateRestaurant[],
   matrix: RouteMatrixElement[],
-  topN: number
+  topN: number,
+  travelMode: string = "DRIVE"
 ): ScoredRestaurant[] {
-  const userCount = matrix.length > 0
-    ? Math.max(...matrix.map((e) => e.originIndex)) + 1
-    : 2;
+  const userCount =
+    matrix.length > 0 ? Math.max(...matrix.map((e) => e.originIndex)) + 1 : 2;
 
   const scored: ScoredRestaurant[] = [];
 
@@ -86,34 +238,33 @@ export function scoreAndRank(
     if (!routes) continue;
 
     const { times, distances } = routes;
-    const maxTime = Math.max(...times);
-    const fairnessScore = maxTime + 0.3 * stdDev(times);
+    const utilities = times.map((t) => absoluteDistScore(t, travelMode));
+    const groupScore = nashWelfare(utilities);
+    const fairnessScore = Math.round((1 - groupScore) * 1000) / 10;
 
     scored.push(buildScoredRestaurant(candidates[d], times, distances, fairnessScore));
   }
 
-  return scored
-    .sort((a, b) => a.fairness_score - b.fairness_score)
-    .slice(0, topN);
+  return scored.sort((a, b) => a.fairness_score - b.fairness_score).slice(0, topN);
 }
 
 // ---------------------------------------------------------------------------
-// Extra Fair mode — weighted multi-criteria utility scoring (higher = better)
-// Dimensions: distance, cuisine (multi-select), price, vibe (niche/mainstream)
-// Global score = mean(utilities) × (1 − 0.3 × stdDev(utilities))
-// Converted to fairness_score: lower = better, for iOS display consistency.
+// Extra Fair mode — ROC weights, graded cuisine, soft price, percentile vibe,
+//                   hybrid distance, Nash welfare, Pareto filter, utility floor
 // ---------------------------------------------------------------------------
 
 export function scoreAndRankExtraFair(
   candidates: CandidateRestaurant[],
   matrix: RouteMatrixElement[],
   preferences: UserPreference[],
-  topN: number
+  topN: number,
+  travelMode: string = "DRIVE",
+  allTogether: boolean = false
 ): ScoredRestaurant[] {
   const userCount = preferences.length;
-  if (userCount === 0) return scoreAndRank(candidates, matrix, topN);
+  if (userCount === 0) return scoreAndRank(candidates, matrix, topN, travelMode);
 
-  // Max travel time per user across all candidates (for normalization)
+  // Per-user max travel time across all candidates (for relative distance component)
   const maxTimePerUser: number[] = Array(userCount).fill(0);
   for (let d = 0; d < candidates.length; d++) {
     for (let o = 0; o < userCount; o++) {
@@ -124,13 +275,31 @@ export function scoreAndRankExtraFair(
     }
   }
 
-  // Log-scale max review count for vibe normalization
-  const maxReviews = Math.max(
-    ...candidates.map((c) => c.user_rating_count ?? 0),
-    1
+  // Review-count percentile for vibe scoring (0 = least reviewed, 1 = most reviewed)
+  const reviewCounts = candidates.map((c) => c.user_rating_count ?? 0);
+  const sorted = [...reviewCounts].sort((a, b) => a - b);
+  const reviewPercentile = candidates.map((c) => {
+    const count = c.user_rating_count ?? 0;
+    const rank = sorted.indexOf(count);
+    return candidates.length > 1 ? rank / (candidates.length - 1) : 0.5;
+  });
+
+  // Per-user active criteria and ROC weights
+  const userActiveCriteria: Set<PriorityKey>[] = preferences.map((pref) => {
+    const active = new Set<PriorityKey>();
+    if (!allTogether) active.add("distance");
+    if (pref.cuisineTypes && pref.cuisineTypes.length > 0) active.add("cuisine");
+    if (pref.maxPrice) active.add("price");
+    if (pref.vibe && pref.vibe !== "any") active.add("vibe");
+    return active;
+  });
+
+  const userWeights = preferences.map((pref, u) =>
+    computeROCWeights(pref.priorities, userActiveCriteria[u])
   );
 
-  const scored: ScoredRestaurant[] = [];
+  // Compute per-candidate per-user utilities
+  const candidateData: { utilities: number[]; times: number[]; distances: number[] }[] = [];
 
   for (let d = 0; d < candidates.length; d++) {
     const routes = routesForDestination(matrix, d, userCount);
@@ -138,82 +307,81 @@ export function scoreAndRankExtraFair(
 
     const { times, distances } = routes;
     const c = candidates[d];
+    const pct = reviewPercentile[d];
     const userUtilities: number[] = [];
 
     for (let u = 0; u < userCount; u++) {
       const pref = preferences[u];
-      const w = preferenceWeights(pref.priorities);
+      const w = userWeights[u];
+      const active = userActiveCriteria[u];
+      let utility = 0;
+      let totalWeight = 0;
 
-      // Distance: closer = higher score
-      const timeScore = maxTimePerUser[u] > 0
-        ? 1 - times[u] / maxTimePerUser[u]
-        : 1;
+      if (active.has("distance")) {
+        const absScore = absoluteDistScore(times[u], travelMode);
+        const relScore = maxTimePerUser[u] > 0 ? 1 - times[u] / maxTimePerUser[u] : 1;
+        const distScore = 0.7 * absScore + 0.3 * relScore;
+        utility += w.distance * distScore;
+        totalWeight += w.distance;
+      }
 
-      // Cuisine: 1 if restaurant matches ANY of user's selected types, 0.5 if no pref
-      const cuisineScore =
-        pref.cuisineTypes && pref.cuisineTypes.length > 0
-          ? pref.cuisineTypes.includes(c.primary_type ?? "") ? 1 : 0
-          : 0.5;
+      if (active.has("cuisine") && pref.cuisineTypes) {
+        const cs = gradedCuisineScore(c.primary_type, pref.cuisineTypes);
+        utility += w.cuisine * cs;
+        totalWeight += w.cuisine;
+      }
 
-      // Price: 1 if at or below max price, 0 if over, 0.5 if no pref
-      const priceScore = pref.maxPrice
-        ? priceRank(c.price_level) <= priceRank(pref.maxPrice) ? 1 : 0
-        : 0.5;
+      if (active.has("price") && pref.maxPrice) {
+        const ps = softPriceScore(c.price_level, pref.maxPrice);
+        utility += w.price * ps;
+        totalWeight += w.price;
+      }
 
-      // Vibe: log-normalized review count
-      const reviewCount = c.user_rating_count ?? 0;
-      const logCount = Math.log1p(reviewCount);
-      const logMax = Math.log1p(maxReviews);
-      let vibeScore = 0.5;
-      if (pref.vibe === "niche") vibeScore = 1 - logCount / logMax;
-      else if (pref.vibe === "mainstream") vibeScore = logCount / logMax;
+      if (active.has("vibe") && pref.vibe && pref.vibe !== "any") {
+        const vs = pref.vibe === "mainstream" ? pct : 1 - pct;
+        utility += w.vibe * vs;
+        totalWeight += w.vibe;
+      }
 
-      const totalWeight = w.distance + w.cuisine + w.price + w.vibe;
-      const utility =
-        (w.distance * timeScore +
-          w.cuisine * cuisineScore +
-          w.price * priceScore +
-          w.vibe * vibeScore) /
-        totalWeight;
-
-      userUtilities.push(utility);
+      userUtilities.push(totalWeight > 0 ? utility / totalWeight : 0.5);
     }
 
-    const meanUtil = userUtilities.reduce((a, b) => a + b, 0) / userCount;
-    const sdUtil = stdDev(userUtilities);
-    const globalScore = meanUtil * (1 - 0.3 * sdUtil);
-
-    // Convert to "lower = better" for consistent iOS display (fairness_score pts)
-    const fairnessScore = Math.round((1 - globalScore) * 1000) / 10;
-
-    scored.push(buildScoredRestaurant(c, times, distances, fairnessScore));
+    candidateData.push({ utilities: userUtilities, times, distances });
   }
 
-  return scored
-    .sort((a, b) => a.fairness_score - b.fairness_score)
-    .slice(0, topN);
-}
+  // Pareto filter — only when we have ample candidates to prune
+  const survivorSet =
+    candidateData.length > 2 * topN
+      ? paretoFilter(candidateData)
+      : new Set(candidateData.map((_, i) => i));
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
+  // Score survivors with Nash welfare + two-tier utility floor
+  const VETO_HARD = 0.05;
+  const VETO_SOFT = 0.25;
+  const scored: ScoredRestaurant[] = [];
 
-type PriorityKey = "distance" | "cuisine" | "price" | "vibe";
+  // Map candidateData indices back to original candidates array
+  let dataIdx = 0;
+  for (let d = 0; d < candidates.length; d++) {
+    const routes = routesForDestination(matrix, d, userCount);
+    if (!routes) continue;
 
-function preferenceWeights(
-  priorities: PriorityKey[]
-): Record<PriorityKey, number> {
-  // Exponential weights so top priority strongly dominates
-  // rank 0 → 2^N, rank 1 → 2^(N-1), ..., unranked → 1
-  const weights: Record<PriorityKey, number> = {
-    distance: 1,
-    cuisine: 1,
-    price: 1,
-    vibe: 1,
-  };
-  const n = priorities.length;
-  priorities.forEach((key, i) => {
-    weights[key] = Math.pow(2, n - i);
-  });
-  return weights;
+    const ci = dataIdx++;
+    if (!survivorSet.has(ci)) continue;
+
+    const { utilities, times, distances } = candidateData[ci];
+    const minUtil = Math.min(...utilities);
+
+    let groupScore = nashWelfare(utilities);
+    if (minUtil < VETO_HARD && candidateData.length > 5) {
+      groupScore *= 0.1;
+    } else if (minUtil < VETO_SOFT) {
+      groupScore *= minUtil / VETO_SOFT;
+    }
+
+    const fairnessScore = Math.round((1 - groupScore) * 1000) / 10;
+    scored.push(buildScoredRestaurant(candidates[d], times, distances, fairnessScore));
+  }
+
+  return scored.sort((a, b) => a.fairness_score - b.fairness_score).slice(0, topN);
 }

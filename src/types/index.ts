@@ -27,6 +27,8 @@ export interface SuggestRequest {
   cuisine_types?: string[];
   /** Simple mode hard price cap e.g. "PRICE_LEVEL_MODERATE" */
   max_price?: string;
+  /** AllTogether mode: users are co-located so distance is excluded from scoring */
+  all_together?: boolean;
 }
 
 export interface CandidateRestaurant {

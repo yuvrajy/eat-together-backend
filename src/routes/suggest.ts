@@ -63,6 +63,7 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   const cuisineTypes = body.cuisine_types;
   const maxPrice: string | undefined = body.max_price;
   const preferences: UserPreference[] = body.preferences ?? [];
+  const allTogether: boolean = body.all_together ?? false;
 
   const PRICE_RANK: Record<string, number> = {
     PRICE_LEVEL_FREE: 0,
@@ -164,8 +165,8 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     // Return top 20 for swipe phase; client picks top 5 after swiping
     const results =
       mode === "extraFair" && preferences.length === users.length
-        ? scoreAndRankExtraFair(candidates, matrix, preferences, 20)
-        : scoreAndRank(candidates, matrix, 20);
+        ? scoreAndRankExtraFair(candidates, matrix, preferences, 20, travelMode, allTogether)
+        : scoreAndRank(candidates, matrix, 20, travelMode);
 
     if (results.length === 0) {
       res.status(404).json({ error: "Could not calculate routes to any nearby restaurants. Try different coordinates." });

@@ -85,8 +85,12 @@ describe("scoreAndRank", () => {
     expect(r.distance_from_a_meters).toBe(6000);
     expect(r.distance_from_b_meters).toBe(7500);
 
-    // max=900, stdDev([750,900])=75 → score = 900 + 0.3*75 = 922.5
-    expect(r.fairness_score).toBeCloseTo(922.5, 1);
+    // absScore(750, DRIVE) = 1 - 750/3600 ≈ 0.7917
+    // absScore(900, DRIVE) = 1 - 900/3600 = 0.75
+    // Nash = sqrt(0.7917 × 0.75) ≈ 0.7706 → fairness_score = (1-0.7706)×100 ≈ 22.9
+    expect(r.fairness_score).toBeGreaterThan(0);
+    expect(r.fairness_score).toBeLessThan(100);
+    expect(r.fairness_score).toBeCloseTo(22.9, 0);
   });
 
   it("returns empty array when no valid routes exist", () => {
