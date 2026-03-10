@@ -58,6 +58,13 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
+  // Routes API caps at 625 elements (origins × destinations); reject huge groups up front
+  const MAX_USERS = 25;
+  if (users.length > MAX_USERS) {
+    res.status(400).json({ error: `Too many users. Maximum allowed is ${MAX_USERS}.` });
+    return;
+  }
+
   const travelMode = body.travel_mode ?? "DRIVE";
   const mode = body.mode ?? "simple";
   const cuisineTypes = body.cuisine_types;
