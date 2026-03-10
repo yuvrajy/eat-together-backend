@@ -174,4 +174,59 @@ describe("POST /api/suggest", () => {
       ["sushi_restaurant"]
     );
   });
+
+  it("returns 502 when findNearbyRestaurants throws", async () => {
+    mockFindNearby.mockRejectedValue(new Error("Places API error 503: overloaded"));
+
+    const res = await request(app).post("/api/suggest").send(VALID_BODY);
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/Upstream API error/);
+  });
+
+  it("returns 502 when getRouteMatrix throws", async () => {
+    mockGetMatrix.mockRejectedValue(new Error("Routes API error 400: Invalid request"));
+
+    const res = await request(app).post("/api/suggest").send(VALID_BODY);
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/Upstream API error/);
+  });
+
+  it("truncates candidates to MAX_CANDIDATES before route matrix call", async () => {
+    const manyCandidates: CandidateRestaurant[] = Array.from({ length: 400 }, (_, i) => ({
+      place_id: `place_${i}`,
+      name: `Restaurant ${i}`,
+      address: `${i} Main St`,
+      location: { lat: 34.05 + i * 0.0001, lng: -118.25 },
+      rating: 4,
+      user_rating_count: 100,
+    }));
+    const matrixForMany = manyCandidates.flatMap((_, dIdx) =>
+      [0, 1].map((oIdx) => ({
+        originIndex: oIdx,
+        destinationIndex: dIdx,
+        durationSeconds: 600,
+        distanceMeters: 5000,
+      }))
+    );
+    mockFindNearby.mockResolvedValue(manyCandidates);
+    mockGetMatrix.mockResolvedValue(matrixForMany);
+
+    await request(app).post("/api/suggest").send(VALID_BODY);
+
+    // 2 users → MAX_CANDIDATES = floor(625/2) = 312
+    expect(mockGetMatrix).toHaveBeenCalled();
+    const [, destinations] = mockGetMatrix.mock.calls[0];
+    expect(destinations).toHaveLength(312);
+  });
+
+  it("returns 404 when route matrix has no valid routes", async () => {
+    mockGetMatrix.mockResolvedValue([]);
+
+    const res = await request(app).post("/api/suggest").send(VALID_BODY);
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/Could not calculate routes|no nearby restaurants/);
+  });
 });
