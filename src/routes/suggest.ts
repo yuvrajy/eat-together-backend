@@ -61,7 +61,16 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
   const travelMode = body.travel_mode ?? "DRIVE";
   const mode = body.mode ?? "simple";
   const cuisineTypes = body.cuisine_types;
+  const maxPrice: string | undefined = body.max_price;
   const preferences: UserPreference[] = body.preferences ?? [];
+
+  const PRICE_RANK: Record<string, number> = {
+    PRICE_LEVEL_FREE: 0,
+    PRICE_LEVEL_INEXPENSIVE: 1,
+    PRICE_LEVEL_MODERATE: 2,
+    PRICE_LEVEL_EXPENSIVE: 3,
+    PRICE_LEVEL_VERY_EXPENSIVE: 4,
+  };
 
   try {
     const mid = users.length === 2 ? midpoint(users[0], users[1]) : centroid(users);
@@ -79,6 +88,16 @@ router.post("/", async (req: Request, res: Response): Promise<void> => {
     if (candidates.length === 0) {
       res.status(404).json({ error: "No restaurants found near the midpoint. Try different coordinates." });
       return;
+    }
+
+    // Hard price filter for simple mode
+    if (mode === "simple" && maxPrice && PRICE_RANK[maxPrice] !== undefined) {
+      const limit = PRICE_RANK[maxPrice];
+      const filtered = candidates.filter(
+        (c) => c.price_level === undefined || (PRICE_RANK[c.price_level] ?? 2) <= limit
+      );
+      // Only apply filter if it leaves at least 3 candidates
+      if (filtered.length >= 3) candidates = filtered;
     }
 
     const restaurantCoords = candidates.map((c) => c.location);

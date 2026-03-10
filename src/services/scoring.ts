@@ -203,15 +203,17 @@ type PriorityKey = "distance" | "cuisine" | "price" | "vibe";
 function preferenceWeights(
   priorities: PriorityKey[]
 ): Record<PriorityKey, number> {
-  // Default weight = 1; ranked priorities get ascending weights
+  // Exponential weights so top priority strongly dominates
+  // rank 0 → 2^N, rank 1 → 2^(N-1), ..., unranked → 1
   const weights: Record<PriorityKey, number> = {
     distance: 1,
     cuisine: 1,
     price: 1,
     vibe: 1,
   };
+  const n = priorities.length;
   priorities.forEach((key, i) => {
-    weights[key] = priorities.length + 1 - i; // rank 0 → highest weight
+    weights[key] = Math.pow(2, n - i);
   });
   return weights;
 }
